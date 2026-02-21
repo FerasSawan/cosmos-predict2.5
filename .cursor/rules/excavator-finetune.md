@@ -4,6 +4,72 @@ This document contains EVERYTHING you need to know to set up and run fine-tuning
 
 ---
 
+## 0. GETTING STARTED ON BREV VM
+
+### Clone the repo
+```bash
+git clone -b excavator-finetune https://github.com/FerasSawan/cosmos-predict2.5.git
+cd cosmos-predict2.5
+```
+
+### Message to paste into Cursor Agent on the Brev VM
+
+Copy and paste this entire block as your first message to the Cursor agent:
+
+---
+
+I need to fine-tune NVIDIA Cosmos Predict 2.5 on an excavator dataset. Everything is documented in `.cursor/rules/excavator-finetune.md` — read that file completely before doing anything.
+
+Here is the full pipeline. Do these steps in order:
+
+**Step 0: Environment Setup**
+Make sure Cosmos and all dependencies are installed. You need: `torch`, `decord`, `mediapy`, `pandas`, `numpy`, `opencv-python`, `tqdm`, `huggingface_hub`, `hf_xet`. Install the Cosmos repo with `pip install -e .` if not already done.
+
+**Step 1: Download the dataset**
+```bash
+pip install huggingface_hub hf_xet tqdm
+python scripts/excavator/download_dataset.py --output-dir datasets/excavator
+```
+This downloads ~22GB (front camera D01 + joystick CSV D05 only) from `FlywheelAI/excavator-dataset` on HuggingFace. It should be fast on the VM's internet. If it gets interrupted, just re-run — it resumes automatically.
+
+**Step 2: Prepare the dataset**
+```bash
+pip install pandas numpy opencv-python tqdm
+python scripts/excavator/prepare_data.py --input-dir datasets/excavator --output-dir datasets/excavator_cosmos --camera front --resolution 480,640 --train-ratio 0.8
+```
+This resizes all videos to 480x640, parses joystick CSVs into 7D action vectors, creates JSON annotations, and splits 80/20 train/val. It uses a subprocess for video resizing so crashes on individual videos don't kill the script. If it gets interrupted, just re-run — it skips already-processed sessions.
+
+Verify the output:
+```bash
+ls datasets/excavator_cosmos/annotations/train/ | wc -l
+ls datasets/excavator_cosmos/annotations/val/ | wc -l
+cat datasets/excavator_cosmos/dataset_info.json
+```
+You should see 140 train and 35 val JSON files.
+
+**Step 3: Create the custom ExcavatorDataset**
+Create `cosmos_predict2/_src/predict2/action/datasets/excavator_dataset.py` — this overrides `_get_actions()` to read actions directly from the JSON instead of recomputing from states using rotation matrix math. Full code and explanation is in the rules file Section 4, Step 1.
+
+**Step 4: Update data.py to use ExcavatorDataset**
+In `cosmos_predict2/experiments/excavator/data.py`, change the import from `Dataset_3D` to `ExcavatorDataset` and update all `L(Dataset_3D)(...)` to `L(ExcavatorDataset)(...)`. Details in rules file Section 4, Step 2.
+
+**Step 5: Create inference params file**
+Create `assets/excavator/inference_params.json` — template is in rules file Section 8.
+
+**Step 6: Test the dataloader**
+Run the test script from rules file Section 9, Task 8 to verify everything loads correctly before starting training.
+
+**Step 7: Start training**
+```bash
+torchrun --nproc_per_node=1 --master_port=12341 -m scripts.train \
+    --config=cosmos_predict2/_src/predict2/action/configs/action_conditioned/config.py \
+    -- experiment=excavator_action_conditioned_2b_480_640
+```
+
+Read `.cursor/rules/excavator-finetune.md` first — it has all the code, all the context, and all the explanations you need. Don't skip it.
+
+---
+
 ## 1. PROJECT OVERVIEW
 
 **Goal**: Fine-tune Cosmos Predict 2.5 (2B model) for action-conditioned video generation of an excavator using joystick control data. The fine-tuned model will later generate synthetic training data for a Vision-Language-Action (VLA) model.
