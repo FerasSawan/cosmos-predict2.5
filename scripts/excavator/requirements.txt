@@ -1,0 +1,14 @@
+# Requirements for excavator data preparation scripts
+# Install with: pip install -r scripts/excavator/requirements.txt
+
+# Data download
+huggingface_hub>=0.20.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+tqdm>=4.65.0
+
+# Video processing (for inference)
+mediapy>=1.1.0
