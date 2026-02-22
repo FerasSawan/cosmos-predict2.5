@@ -1,94 +1,87 @@
 #!/bin/bash
 # =============================================================================
-# Excavator Action-Conditioned Training Script for Brev VM (H200)
+# Excavator Action-Conditioned Training Script (v2 - Fixed Scaling + NL)
 # =============================================================================
 #
-# This script launches fine-tuning of Cosmos Predict 2.5 on the excavator dataset.
+# Fine-tunes Cosmos Predict 2.5 action-conditioned model on excavator dataset
+# with frame + natural language + joystick action conditioning.
+#
+# Key fixes from v1:
+#   - Action scaling: 1.0 (was 20.0 which caused blue screens)
+#   - Learning rate: 2^-16 (lower for stable fine-tuning)
+#   - T5 text embeddings: enabled for natural language
+#   - Uses ExcavatorDataset (reads actions directly from JSON)
 #
 # Prerequisites:
-#   1. Dataset prepared using prepare_data.py and uploaded to VM
-#   2. Cosmos Predict 2.5 environment set up (see docs/setup.md)
-#   3. HuggingFace login for model downloads: huggingface-cli login
+#   1. Dataset uploaded to VM at datasets/excavator_cosmos/
+#   2. Labels processed: python scripts/excavator/process_labels.py ...
+#   3. T5 embeddings generated: python scripts/excavator/generate_t5_embeddings.py ...
+#   4. HuggingFace login: huggingface-cli login
 #
 # Usage:
 #   ./scripts/excavator/train_excavator.sh
-#
-# Or with custom output directory:
-#   IMAGINAIRE_OUTPUT_ROOT=/path/to/output ./scripts/excavator/train_excavator.sh
-#
 # =============================================================================
 
 set -e
 
-# Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-
-# Change to project root
 cd "$PROJECT_ROOT"
 
-# Set output directory for checkpoints (default: /tmp/imaginaire4-output)
-# IMPORTANT: Change this to a location with sufficient disk space!
-export IMAGINAIRE_OUTPUT_ROOT="${IMAGINAIRE_OUTPUT_ROOT:-/workspace/cosmos_output}"
+export IMAGINAIRE_OUTPUT_ROOT="${IMAGINAIRE_OUTPUT_ROOT:-/home/ubuntu/cosmos_output}"
+export HF_HOME="${HF_HOME:-/home/ubuntu/hf_cache}"
 
-# Set HuggingFace cache directory
-export HF_HOME="${HF_HOME:-/workspace/hf_cache}"
-
-# Create directories
 mkdir -p "$IMAGINAIRE_OUTPUT_ROOT"
 mkdir -p "$HF_HOME"
 
 echo "============================================================"
-echo "Excavator Action-Conditioned Training"
+echo "Excavator Training v2 (Frame + NL + Actions)"
 echo "============================================================"
 echo "Project root: $PROJECT_ROOT"
-echo "Output directory: $IMAGINAIRE_OUTPUT_ROOT"
-echo "HF cache: $HF_HOME"
+echo "Output: $IMAGINAIRE_OUTPUT_ROOT"
 echo "============================================================"
-echo ""
 
-# Check if dataset exists
 DATASET_PATH="datasets/excavator_cosmos"
 if [ ! -d "$DATASET_PATH" ]; then
     echo "ERROR: Dataset not found at $DATASET_PATH"
-    echo "Please run prepare_data.py first and upload the prepared dataset."
     exit 1
 fi
 
-# Count training samples
-TRAIN_COUNT=$(ls -1 "$DATASET_PATH/annotations/train" 2>/dev/null | wc -l)
-VAL_COUNT=$(ls -1 "$DATASET_PATH/annotations/val" 2>/dev/null | wc -l)
-echo "Dataset statistics:"
-echo "  Training samples: $TRAIN_COUNT"
-echo "  Validation samples: $VAL_COUNT"
+# Verify T5 embeddings exist
+T5_COUNT=$(ls -1 "$DATASET_PATH/annotations/train/"*.npy 2>/dev/null | wc -l)
+JSON_COUNT=$(ls -1 "$DATASET_PATH/annotations/train/"*.json 2>/dev/null | wc -l)
+echo "Train: $JSON_COUNT annotations, $T5_COUNT T5 embeddings"
+
+if [ "$T5_COUNT" -eq 0 ]; then
+    echo ""
+    echo "WARNING: No T5 embeddings found!"
+    echo "Run this first:"
+    echo "  python scripts/excavator/generate_t5_embeddings.py \\"
+    echo "      --annotations-dir $DATASET_PATH/annotations"
+    echo ""
+    echo "Continuing without T5 (will use zero embeddings)..."
+fi
+
+VAL_COUNT=$(ls -1 "$DATASET_PATH/annotations/val/"*.json 2>/dev/null | wc -l)
+echo "Val: $VAL_COUNT annotations"
 echo ""
 
-if [ "$TRAIN_COUNT" -eq 0 ]; then
-    echo "ERROR: No training samples found!"
-    exit 1
-fi
-
-# Activate virtual environment if it exists
 if [ -f ".venv/bin/activate" ]; then
-    echo "Activating virtual environment..."
     source .venv/bin/activate
 fi
 
-# Number of GPUs (H200 typically single GPU per instance)
 NUM_GPUS="${NUM_GPUS:-1}"
-
-# Training configuration
 EXPERIMENT="excavator_action_conditioned_2b_480_640"
 CONFIG_PATH="cosmos_predict2/_src/predict2/action/configs/action_conditioned/config.py"
 
 echo "Starting training..."
 echo "  Experiment: $EXPERIMENT"
-echo "  Config: $CONFIG_PATH"
 echo "  GPUs: $NUM_GPUS"
+echo "  LR: 2^-16 (~1.5e-05)"
+echo "  Action scaling: 1.0"
+echo "  Text conditioning: enabled"
 echo ""
 
-# Launch training
-# Note: We disable wandb by default. Remove job.wandb_mode=disabled to enable.
 torchrun \
     --nproc_per_node=$NUM_GPUS \
     --master_port=12341 \
@@ -110,12 +103,12 @@ echo ""
 echo "============================================================"
 echo "Training complete!"
 echo "============================================================"
-echo "Checkpoints saved to: $IMAGINAIRE_OUTPUT_ROOT/cosmos_predict2_excavator/"
+echo "Checkpoints: $IMAGINAIRE_OUTPUT_ROOT/cosmos_predict2_excavator/"
 echo ""
 echo "Next steps:"
-echo "1. Convert checkpoint for inference:"
-echo "   python scripts/convert_distcp_to_pt.py <checkpoint_dir>/model <checkpoint_dir>"
+echo "1. Convert checkpoint:"
+echo "   python scripts/convert_distcp_to_pt.py <ckpt_dir>/model <ckpt_dir>"
 echo ""
-echo "2. Run inference:"
-echo "   python scripts/excavator/inference_excavator.py --checkpoint <checkpoint_path>"
+echo "2. Inference:"
+echo "   python scripts/excavator/inference_excavator.py --checkpoint <path>"
 echo "============================================================"

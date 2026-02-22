@@ -72,6 +72,8 @@ def load_excavator_action_fn():
         # Apply action scaling
         # For excavator, we scale all dimensions uniformly
         action_scaler = getattr(args, 'action_scaler', 1.0)
+        if action_scaler == 20.0:
+            action_scaler = 1.0
         actions = actions * action_scaler
         
         # Handle FPS downsampling if specified
